@@ -1,0 +1,61 @@
+PODS:
+  - camera_avfoundation (0.0.1):
+    - Flutter
+  - dropbox_client (1.1.0):
+    - Flutter
+    - ObjectiveDropboxOfficial
+  - environment_sensors (0.0.1):
+    - Flutter
+  - Flutter (1.0.0)
+  - ObjectiveDropboxOfficial (7.4.2)
+  - photo_manager (3.8.3):
+    - Flutter
+    - FlutterMacOS
+  - sensors_plus (0.0.1):
+    - Flutter
+  - video_player_avfoundation (0.0.1):
+    - Flutter
+    - FlutterMacOS
+
+DEPENDENCIES:
+  - camera_avfoundation (from `.symlinks/plugins/camera_avfoundation/ios`)
+  - dropbox_client (from `.symlinks/plugins/dropbox_client/ios`)
+  - environment_sensors (from `.symlinks/plugins/environment_sensors/ios`)
+  - Flutter (from `Flutter`)
+  - photo_manager (from `.symlinks/plugins/photo_manager/darwin`)
+  - sensors_plus (from `.symlinks/plugins/sensors_plus/ios`)
+  - video_player_avfoundation (from `.symlinks/plugins/video_player_avfoundation/darwin`)
+
+SPEC REPOS:
+  trunk:
+    - ObjectiveDropboxOfficial
+
+EXTERNAL SOURCES:
+  camera_avfoundation:
+    :path: ".symlinks/plugins/camera_avfoundation/ios"
+  dropbox_client:
+    :path: ".symlinks/plugins/dropbox_client/ios"
+  environment_sensors:
+    :path: ".symlinks/plugins/environment_sensors/ios"
+  Flutter:
+    :path: Flutter
+  photo_manager:
+    :path: ".symlinks/plugins/photo_manager/darwin"
+  sensors_plus:
+    :path: ".symlinks/plugins/sensors_plus/ios"
+  video_player_avfoundation:
+    :path: ".symlinks/plugins/video_player_avfoundation/darwin"
+
+SPEC CHECKSUMS:
+  camera_avfoundation: 281867ff09f1da66f031a184ecfbc6f2e625c9f5
+  dropbox_client: 0d72681ee5ad3a49eb06e8ca779e0561d7f129a0
+  environment_sensors: 46802526e2f9e5b84722e0327d6391168b7ad74f
+  Flutter: cabc95a1d2626b1b06e7179b784ebcf0c0cde467
+  ObjectiveDropboxOfficial: 1645cbc5a542831173425b00ed6929d5a07d0a95
+  photo_manager: 647b6f5c5057632e2d00e2921c6ce3437ded57a9
+  sensors_plus: 7229095999f30740798f0eeef5cd120357a8f4f2
+  video_player_avfoundation: 7993f492ae0bd77edaea24d9dc051d8bb2cd7c86
+
+PODFILE CHECKSUM: 4d8a651e48eb2bdfd919b49510a5755b7d66afcb
+
+COCOAPODS: 1.16.2

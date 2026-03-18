@@ -1,0 +1,162 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'setup_page_logic.dart'; 
+import 'setup_ui_components.dart';
+
+class SetupPage extends StatefulWidget {
+  const SetupPage({super.key});
+  @override
+  State<SetupPage> createState() => _SetupPageState();
+}
+
+class _SetupPageState extends SetupPageLogic {
+  @override
+  Widget build(BuildContext context) {
+    if (!c.cameraReady || textureId == null) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(child: CircularProgressIndicator(color: Colors.cyanAccent)),
+      );
+    }
+
+    final isLandscape = MediaQuery.of(context).orientation == Orientation.landscape;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: GestureDetector(
+        onScaleStart: (details) {
+          if (isLocked) return;
+          baseZoom = c.zoomFactor;
+        },
+        onScaleUpdate: (details) {
+          if (isLocked) return;
+          setState(() {
+            c.zoomFactor = (baseZoom * details.scale).clamp(1.0, 10.0);
+            c.updateHardwareZoom(c.zoomFactor);
+            if (c.zoomFactor < 1.0) c.selectedLens = "ULTRA";
+            else if (c.zoomFactor >= 3.0) c.selectedLens = "TELE";
+            else c.selectedLens = "WIDE";
+          });
+        },
+        child: Stack(
+          children: [
+            // 1. NATIVE PREVIEW (Fixed Aspect Ratio)
+            Positioned.fill(
+              child: Center(
+                child: AspectRatio(
+                  aspectRatio: isLandscape ? 16 / 9 : 9 / 16,
+                  child: Texture(textureId: textureId!),
+                ),
+              ),
+            ),
+
+            // 2. PRORES 4K 120FPS BADGE
+            Positioned(
+              top: isLandscape ? 20 : 55,
+              left: 20,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.redAccent.withOpacity(0.9),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: const Text(
+                  "4K 120 PRORES",
+                  style: TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+
+            // 3. ZOOM MINI-MAP
+            if (c.zoomFactor > 1.2)
+              Positioned(
+                top: isLandscape ? 80 : 160,
+                right: 20,
+                child: _buildMiniMap(),
+              ),
+
+            // 4. TOP CONTROLS (Includes Focus Tab)
+            Positioned(
+              top: 0, left: 0, right: 0,
+              child: Container(
+                color: Colors.black.withOpacity(0.5),
+                padding: EdgeInsets.only(top: isLandscape ? 15 : 45, bottom: 10),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(
+                      height: 55, 
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const SizedBox(width: 15),
+                            SetupUI.buildProButton(label: "LENS", value: c.selectedLens, isActive: c.activeSetting == "LENS", onTap: () => updateActive("LENS")),
+                            buildLockButton(),
+                            SetupUI.buildProButton(label: "SHUTTER", value: c.selectedShutter, isActive: c.activeSetting == "SHUTTER", onTap: () => updateActive("SHUTTER")),
+                            SetupUI.buildProButton(label: "ISO", value: "${c.selectedISO}", isActive: c.activeSetting == "ISO", onTap: () => updateActive("ISO")),
+                            SetupUI.buildProButton(label: "WB", value: c.selectedWB, isActive: c.activeSetting == "WB", onTap: () => updateActive("WB")),
+                            SetupUI.buildProButton(label: "FOCUS", value: c.selectedFocus.toStringAsFixed(2), isActive: c.activeSetting == "FOCUS", onTap: () => updateActive("FOCUS")),
+                            const SizedBox(width: 15),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      c.formatDuration(),
+                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: 1.2)
+                    ),
+                    if (c.activeSetting != null) buildContextualSlider(),
+                  ],
+                ),
+              ),
+            ),
+
+            // 5. IMU DATA HUD
+            Positioned(
+              bottom: isLandscape ? 20 : 125, 
+              right: 20, 
+              child: SetupUI.build6AxisHUD(s)
+            ),
+
+            // 6. RECORDING TRIGGER
+            Positioned(
+              bottom: isLandscape ? 20 : 45, 
+              left: isLandscape ? 20 : 0, 
+              right: isLandscape ? null : 0,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SetupUI.buildStabilityIndicator(s.isStable),
+                  const SizedBox(height: 15),
+                  buildRecordButton(),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildMiniMap() {
+    return Container(
+      width: 100, height: 140,
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: Stack(
+          children: [
+            Opacity(opacity: 0.5, child: Transform.scale(scale: 1.0 / c.zoomFactor, child: Texture(textureId: textureId!))),
+            Center(child: Container(width: 100 / c.zoomFactor, height: 140 / c.zoomFactor, decoration: BoxDecoration(border: Border.all(color: Colors.red, width: 2)))),
+          ],
+        ),
+      ),
+    );
+  }
+}
