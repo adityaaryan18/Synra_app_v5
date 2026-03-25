@@ -6,6 +6,8 @@
     <true/>
     <key>LSSupportsOpeningDocumentsInPlace</key>
     <true/>
+    <key>UISupportsDocumentBrowser</key>
+    <true/>
 
     <key>CADisableMinimumFrameDurationOnPhone</key>
     <true/>
@@ -52,17 +54,24 @@
     <key>NSCameraUsageDescription</key>
     <string>Camera access is required for high-speed video recording and LiDAR depth sensing.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Microphone access is required for video recording.</string>
+    <string>Microphone access is required for high-speed video recording and voice memos.</string>
     <key>NSPhotoLibraryAddUsageDescription</key>
     <string>Synra needs permission to save high-speed recordings to your gallery.</string>
     <key>NSPhotoLibraryUsageDescription</key>
     <string>Synra needs access to your gallery to view and upload videos.</string>
-
     <key>NSMotionUsageDescription</key>
     <string>This app requires motion and barometric data for high-speed aerospace rotor vibration analysis.</string>
 
-    <key>NSLocationWhenInUseUsageDescription</key>
-    <string>Location data is required for session metadata and GPS-synced testing.</string>
+    <key>NSUbiquitousContainers</key>
+    <dict>
+        <key>iCloud.com.appdev.synra</key> 
+        <dict>
+            <key>NSUbiquitousContainerIsDocumentScopePublic</key>
+            <true/>
+            <key>NSUbiquitousContainerSupportedFolderLevels</key>
+            <string>Any</string>
+        </dict>
+    </dict>
     
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>Synra uses your location to tag GPS coordinates in your session metadata.</string>

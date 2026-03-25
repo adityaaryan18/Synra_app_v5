@@ -27,13 +27,18 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   void initState() {
     super.initState();
 
-    _controller = VideoPlayerController.file(widget.videoFile)
-      ..initialize().then((_) {
-        _totalFrames =
-            (_controller.value.duration.inMilliseconds * _fps ~/ 1000);
-        setState(() {});
+// Inside _VideoPlayerPageState initialize block
+  _controller = VideoPlayerController.file(widget.videoFile)
+    ..initialize().then((_) {
+      if (mounted) {
+        setState(() {
+          // Use a safe check for duration
+          final durationMs = _controller.value.duration.inMilliseconds;
+          _totalFrames = (durationMs > 0) ? (durationMs * _fps ~/ 1000) : 0;
+        });
         _controller.play();
-      });
+      }
+    });
 
     _controller.addListener(_updateFrameCount);
   }

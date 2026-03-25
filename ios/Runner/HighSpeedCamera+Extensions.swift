@@ -5,40 +5,29 @@ import UIKit
 extension HighSpeedCamera: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput buffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(buffer) else { return }
-        
-        // 1. Update Preview Texture
-        self.latestPixelBuffer = pixelBuffer
-        
-        // PERFORMANCE FIX: Call registry directly on the camera queue. 
-        // Flutter's textureRegistry is thread-safe. Jumping to Main at 120fps causes frame drops.
-        self.textureRegistry?.textureFrameAvailable(self.textureId)
 
-        // 2. High-Speed Recording Logic
-        // Use a local reference to ensure the writer doesn't deallocate mid-frame
+        self.latestPixelBuffer = pixelBuffer
+        self.textureRegistry?.textureFrameAvailable(self.textureId)
         guard isRecording, let writer = self.writer, writer.status == .writing else { return }
         
         let ts = CMSampleBufferGetPresentationTimeStamp(buffer)
-        
-        // Initialize Session on first frame
+
         if startTime == nil { 
             startTime = ts
             writer.startSession(atSourceTime: ts) 
         }
-        
-        // Append buffer if hardware is ready
+
         if let input = self.writerInput, input.isReadyForMoreMediaData {
             input.append(buffer)
         }
     }
 }
 
-// MARK: - Depth Data Delegate
 extension HighSpeedCamera: AVCaptureDepthDataOutputDelegate {
     func depthDataOutput(_ output: AVCaptureDepthDataOutput, didOutput depthData: AVDepthData, timestamp: CMTime, connection: AVCaptureConnection) {
         guard captureDepthOnce else { return }
         captureDepthOnce = false
         
-        // Ensure we use the 32-bit Float format for maximum precision for ANSYS
         let convertedDepth = depthData.converting(toDepthDataType: kCVPixelFormatType_DepthFloat32)
         saveDepthMap(convertedDepth.depthDataMap)
         
@@ -49,12 +38,19 @@ extension HighSpeedCamera: AVCaptureDepthDataOutputDelegate {
     internal func saveDepthMap(_ pixelBuffer: CVPixelBuffer) {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        // Add this at the beginning of the function (saveDepthMap or didOutput)
         
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else { return }
+        let currentZoom = device.videoZoomFactor
+        let zoomString = String(format: "%.1fx", currentZoom)
+
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
         guard let base = CVPixelBufferGetBaseAddress(pixelBuffer), 
-              let folder = currentSessionFolderURL else { return }
+            let folder = currentSessionFolderURL else { return }
         
+
+
         var rawData = [UInt16](repeating: 0, count: width * height)
         let bpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
         
@@ -62,12 +58,9 @@ extension HighSpeedCamera: AVCaptureDepthDataOutputDelegate {
             let row = base.advanced(by: y * bpr).assumingMemoryBound(to: Float32.self)
             for x in 0..<width {
                 let depthInMeters = row[x]
-                
-                // CRITICAL FIX: Handle NaN or invalid depth values to prevent cast crashes
                 if depthInMeters.isNaN || depthInMeters < 0 {
                     rawData[y * width + x] = 0
                 } else {
-                    // Convert meters to millimeters for your RAW profile
                     let mm = depthInMeters * 1000.0
                     rawData[y * width + x] = UInt16(clamping: Int(mm))
                 }
@@ -77,15 +70,48 @@ extension HighSpeedCamera: AVCaptureDepthDataOutputDelegate {
         let rawURL = folder.appendingPathComponent("lidar_profile.raw")
         try? Data(buffer: UnsafeBufferPointer(start: rawData, count: rawData.count)).write(to: rawURL)
         
-        // Metadata for post-processing alignment
+        let currentFPS = 1.0 / CMTimeGetSeconds(device.activeVideoMinFrameDuration)
+        let exposureDuration = CMTimeGetSeconds(device.exposureDuration)
+        let totalZoom = device.videoZoomFactor
+        
+        // 4. GPS Coordinates (from your locationManager property)
+        let lat = lastLocation?.coordinate.latitude ?? 0.0
+        let lon = lastLocation?.coordinate.longitude ?? 0.0
+        let alt = lastLocation?.altitude ?? 0.0
+
         let meta: [String: Any] = [
-            "timestamp": Date().timeIntervalSince1970,
-            "width": width,
-            "height": height,
-            "format": "UInt16_mm"
+            "experiment_details": [
+                "name": self.experimentName,
+                "description": self.experimentDesc
+            ],
+            "session_info": [
+                "timestamp": Date().timeIntervalSince1970,
+                "fps_actual": 1.0 / CMTimeGetSeconds(device.activeVideoMinFrameDuration),
+                "exposure_seconds": CMTimeGetSeconds(device.exposureDuration),
+                "iso": device.iso
+            ],
+            "optics": [
+                "zoom_ratio_numeric": Double(currentZoom), // 1.2
+                "zoom_display": zoomString,                // "1.2x"
+                "lens_aperture": device.lensAperture,
+                "base_zoom_factor": device.minAvailableVideoZoomFactor 
+            ],
+            "location": [
+                "latitude": lastLocation?.coordinate.latitude ?? 0.0,
+                "longitude": lastLocation?.coordinate.longitude ?? 0.0,
+                "altitude_m": lastLocation?.altitude ?? 0.0
+            ],
+            "raw_format": [
+                "width": width,
+                "height": height,
+                "unit": "UInt16_mm"
+            ]
         ]
-        if let data = try? JSONSerialization.data(withJSONObject: meta, options: .prettyPrinted) {
-            try? data.write(to: folder.appendingPathComponent("metadata.json"))
-        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: meta, options: .prettyPrinted),
+            let folder = currentSessionFolderURL {
+                try? data.write(to: folder.appendingPathComponent("metadata.json"))
+                print("Successfully saved metadata for: \(self.experimentName)")
+            }
     }
 }

@@ -12,7 +12,7 @@ class DropboxService {
   final String clientId = "26to6hl1uhekjtl";
   final String clientSecret = "jpba0y24qk1r4k8";
   
-  // 🚀 PASTE YOUR NEW REFRESH TOKEN HERE AFTER RUNNING THE CURL COMMAND
+  // PASTE YOUR NEW REFRESH TOKEN HERE AFTER RUNNING THE CURL COMMAND
   final String refreshToken = "BcEM90FhOq8AAAAAAAAAAR7l7Cr71GboZTWTMV8wrO7f51c7L7MJu_arD4GQikB3";
 
   Future<String?> _getAccessToken() async {
@@ -91,9 +91,6 @@ class DropboxService {
   }
 }
 
-/* ─────────────────────────────────────────────────────────────
-   SESSION GALLERY PAGE
-   ───────────────────────────────────────────────────────────── */
 class SessionGalleryPage extends StatefulWidget {
   const SessionGalleryPage({super.key});
 

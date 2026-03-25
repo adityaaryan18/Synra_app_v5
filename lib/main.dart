@@ -3,6 +3,7 @@ import 'pages/home_page.dart';
 
 void main() {
   runApp(const SynraApp());
+  
 }
 
 class SynraApp extends StatelessWidget {

@@ -22,6 +22,10 @@ dependencies:
   provider: ^6.1.5+1
   dropbox_client: ^1.2.0
   environment_sensors: ^0.3.0
+  csv: ^7.2.0
+  dio: ^5.9.2
+  file_picker: ^10.3.10
+  shared_preferences: ^2.5.4
 
 dev_dependencies:
   flutter_test:

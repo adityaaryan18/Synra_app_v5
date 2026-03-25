@@ -1,32 +1,34 @@
 import UIKit
 import Flutter
-    
+
 @main
 @objc class AppDelegate: FlutterAppDelegate {
-  
-  // We hold the bridge here to ensure it doesn't get garbage collected
-  var bridge: SwiftBridge?
 
-  override func application(
-    _ application: UIApplication,
-    didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
-  ) -> Bool {
-    
-    let controller = window?.rootViewController as! FlutterViewController
-    let messenger = controller.binaryMessenger
-    
-    // MANUAL REGISTRATION
-    let channel = FlutterMethodChannel(name: "synra/camera", binaryMessenger: messenger)
-    
-    // We need a way to get the registrar manually
-    if let registrar = self.registrar(forPlugin: "SwiftBridge") {
-        self.bridge = SwiftBridge(registrar: registrar)
-        channel.setMethodCallHandler { [weak self] (call, result) in
-            self?.bridge?.handle(call, result: result)
+    var bridge: SwiftBridge?
+    override func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
+    ) -> Bool {
+        
+        GeneratedPluginRegistrant.register(with: self)
+
+        guard let controller = window?.rootViewController as? FlutterViewController else {
+            return super.application(application, didFinishLaunchingWithOptions: launchOptions)
         }
-    }
+        let messenger = controller.binaryMessenger
+        let channel = FlutterMethodChannel(name: "synra/camera", binaryMessenger: messenger)
 
-    GeneratedPluginRegistrant.register(with: self)
-    return super.application(application, didFinishLaunchingWithOptions: launchOptions)
-  }
+        if let registrar = self.registrar(forPlugin: "SwiftBridge") {
+            self.bridge = SwiftBridge(registrar: registrar)
+            
+            channel.setMethodCallHandler { [weak self] (call, result) in
+                guard let self = self, let bridge = self.bridge else {
+                    result(FlutterMethodNotImplemented)
+                    return
+                }
+                bridge.handle(call, result: result)
+            }
+        }
+        return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+    }
 }
