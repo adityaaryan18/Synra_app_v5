@@ -42,6 +42,7 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
     private var currentZoomFactor: CGFloat = 1.0
     private var didStartAccessing: Bool = false
     private var bookmarkDataKey = "synra_folder_bookmark"
+    internal var audioRecorder: AVAudioRecorder?
 
     internal var customSaveRootURL: URL?
 
@@ -180,12 +181,36 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
             } catch { print("Zoom Error: \(error)") }
         }   
     }
+    private func startAudioRecording() {
+        guard let folder = currentSessionFolderURL else { return }
+        let audioURL = folder.appendingPathComponent("audio_log.m4a") // iOS prefers .m4a (AAC), standard for experiments
+        
+        let settings: [String: Any] = [
+            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
+            AVSampleRateKey: 44100,
+            AVNumberOfChannelsKey: 1,
+            AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
+        ]
+        
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .videoRecording, options: .defaultToSpeaker)
+            try session.setActive(true)
+            
+            audioRecorder = try AVAudioRecorder(url: audioURL, settings: settings)
+            audioRecorder?.record()
+            print("SYNRA: Audio recording started at \(audioURL.path)")
+        } catch {
+            print("SYNRA: Audio setup failed: \(error)")
+        }
+    }
 
     func startRecording(fps: Int, name: String, description: String) {
         self.experimentName = name.isEmpty ? "Unnamed_Session" : name
         self.experimentDesc = description
 
         self.createSessionFolder()
+        startAudioRecording()
         queue.async {
 
             self.configureSession(fps: fps)
@@ -309,6 +334,9 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
             isRecording = false
             motionManager.stopDeviceMotionUpdates()
             altimeter.stopRelativeAltitudeUpdates()
+
+            audioRecorder?.stop()
+            audioRecorder = nil
             
             queue.async {
                 self.writerInput?.markAsFinished()

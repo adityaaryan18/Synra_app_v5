@@ -4,16 +4,33 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart'; // For Clipboard
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
+import 'package:synra/pages/lidar_heatmap.dart';
 
 /* ─────────────────────────────────────────────────────────────
    DROPBOX SERVICE
    ───────────────────────────────────────────────────────────── */
+
 class DropboxService {
+  // Singleton pattern to ensure the same instance is used across the app
+  static final DropboxService _instance = DropboxService._internal();
+  factory DropboxService() => _instance;
+  DropboxService._internal();
+
   final String clientId = "26to6hl1uhekjtl";
   final String clientSecret = "jpba0y24qk1r4k8";
-  
-  // PASTE YOUR NEW REFRESH TOKEN HERE AFTER RUNNING THE CURL COMMAND
   final String refreshToken = "BcEM90FhOq8AAAAAAAAAAR7l7Cr71GboZTWTMV8wrO7f51c7L7MJu_arD4GQikB3";
+
+  // --- PROGRESS TRACKING ---
+  // Key: Folder Name, Value: Progress (0.0 to 1.0)
+  final ValueNotifier<Map<String, double>> uploadProgress = ValueNotifier({});
+  
+  // Track active cancel tokens
+  final Map<String, bool> _cancelRequests = {};
+
+  /// Call this to stop an ongoing upload
+  void cancelUpload(String folderName) {
+    _cancelRequests[folderName] = true;
+  }
 
   Future<String?> _getAccessToken() async {
     final url = Uri.parse("https://api.dropboxapi.com/oauth2/token");
@@ -27,13 +44,66 @@ class DropboxService {
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body)['access_token'];
-      } else {
-        debugPrint("Auth Error: ${response.body}");
-        return null;
       }
+      debugPrint("Auth Error: ${response.body}");
+      return null;
     } catch (e) {
       debugPrint("Network Error: $e");
       return null;
+    }
+  }
+
+  /// High-level method to upload an entire directory with progress
+  Future<void> uploadSession(
+    Directory folder, {
+    required Function(String url) onComplete,
+    required Function(String error) onError,
+  }) async {
+    final folderName = folder.path.split('/').last;
+    final files = folder.listSync().whereType<File>().toList();
+    
+    if (files.isEmpty) {
+      onError("Folder is empty");
+      return;
+    }
+
+    // Initialize state
+    _cancelRequests[folderName] = false;
+    _updateProgress(folderName, 0.0);
+
+    int uploadedCount = 0;
+    String remoteFolderPath = "/SYNRA ipad App Data/$folderName";
+
+    for (var file in files) {
+      // Check for cancellation before each file upload
+      if (_cancelRequests[folderName] == true) {
+        _cleanup(folderName);
+        onError("Upload cancelled");
+        return;
+      }
+
+      final fileName = file.path.split('/').last;
+      bool ok = await uploadFile(file, "$remoteFolderPath/$fileName");
+
+      if (ok) {
+        uploadedCount++;
+        _updateProgress(folderName, uploadedCount / files.length);
+      } else {
+        // If a single file fails, you can choose to continue or abort. 
+        // Here we continue but log it.
+        debugPrint("Failed to upload: $fileName");
+      }
+    }
+
+    // Generate shared link after all files are done
+    String? sharedUrl = await getSharedLink(remoteFolderPath);
+    
+    _cleanup(folderName);
+    
+    if (sharedUrl != null) {
+      onComplete(sharedUrl);
+    } else {
+      onError("Uploaded files but failed to generate sharing link.");
     }
   }
 
@@ -61,7 +131,6 @@ class DropboxService {
     return response.statusCode == 200;
   }
 
-  // Generates a public link for the folder
   Future<String?> getSharedLink(String folderPath) async {
     final token = await _getAccessToken();
     if (token == null) return null;
@@ -83,11 +152,25 @@ class DropboxService {
     final data = jsonDecode(response.body);
     if (response.statusCode == 200) {
       return data['url'];
-    } else if (data['error']['.tag'] == 'shared_link_already_exists') {
-      // If link already exists, Dropbox returns an error; we can usually find the URL in the error metadata
+    } else if (data['error']?['.tag'] == 'shared_link_already_exists') {
       return data['error']['shared_link_already_exists']['metadata']['url'];
     }
     return null;
+  }
+
+  // --- INTERNAL HELPERS ---
+
+  void _updateProgress(String key, double value) {
+    final current = Map<String, double>.from(uploadProgress.value);
+    current[key] = value;
+    uploadProgress.value = current;
+  }
+
+  void _cleanup(String key) {
+    final current = Map<String, double>.from(uploadProgress.value);
+    current.remove(key);
+    uploadProgress.value = current;
+    _cancelRequests.remove(key);
   }
 }
 
@@ -101,6 +184,7 @@ class SessionGalleryPage extends StatefulWidget {
 class _SessionGalleryPageState extends State<SessionGalleryPage> {
   List<Directory> _sessions = [];
   bool _loading = true;
+  // Use the Singleton instance
   final DropboxService _dropbox = DropboxService();
 
   @override
@@ -129,46 +213,23 @@ class _SessionGalleryPageState extends State<SessionGalleryPage> {
     });
   }
 
-  Future<void> _uploadSession(Directory folder) async {
-    final folderName = folder.path.split('/').last;
-    final files = folder.listSync().whereType<File>().toList();
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => AlertDialog(
-        content: Row(
-          children: [
-            const CircularProgressIndicator(),
-            const SizedBox(width: 20),
-            Expanded(child: Text("Uploading $folderName...")),
-          ],
-        ),
-      ),
+  // Refactored to use the new non-blocking service method
+  void _startUpload(Directory folder) {
+    final name = folder.path.split('/').last;
+    
+    _dropbox.uploadSession(
+      folder,
+      onComplete: (sharedUrl) {
+        if (mounted) {
+          _showShareSuccessDialog(name, sharedUrl);
+        }
+      },
+      onError: (error) {
+        if (mounted) {
+          _showSnackBar(error);
+        }
+      },
     );
-
-    int count = 0;
-    String remoteFolderPath = "/SYNRA ipad App Data/$folderName";
-
-    for (var file in files) {
-      final fileName = file.path.split('/').last;
-      bool ok = await _dropbox.uploadFile(
-        file,
-        "$remoteFolderPath/$fileName",
-      );
-      if (ok) count++;
-    }
-
-    // Try to get a shared link now that upload is done
-    String? sharedUrl = await _dropbox.getSharedLink(remoteFolderPath);
-
-    Navigator.pop(context); // Close loading dialog
-
-    if (sharedUrl != null) {
-      _showShareSuccessDialog(folderName, sharedUrl);
-    } else {
-      _showSnackBar("Uploaded $count/${files.length} files to Dropbox.");
-    }
   }
 
   void _showShareSuccessDialog(String folderName, String url) {
@@ -208,26 +269,56 @@ class _SessionGalleryPageState extends State<SessionGalleryPage> {
       ),
       body: _loading
           ? const Center(child: CircularProgressIndicator())
-          : ListView.builder(
-              itemCount: _sessions.length,
-              itemBuilder: (ctx, i) {
-                final folder = _sessions[i];
-                final name = folder.path.split('/').last;
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  child: ListTile(
-                    leading: const Icon(Icons.folder, color: Colors.amber, size: 36),
-                    title: Text(name),
-                    subtitle: const Text("Includes LiDAR, Video, IMU"),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.cloud_upload, color: Colors.blue),
-                      onPressed: () => _uploadSession(folder),
-                    ),
-                    onTap: () => Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => FileBrowserPage(directory: folder)),
-                    ),
-                  ),
+          : ValueListenableBuilder<Map<String, double>>(
+              valueListenable: _dropbox.uploadProgress,
+              builder: (context, activeUploads, child) {
+                return ListView.builder(
+                  itemCount: _sessions.length,
+                  itemBuilder: (ctx, i) {
+                    final folder = _sessions[i];
+                    final name = folder.path.split('/').last;
+                    
+                    // Check if this specific folder is currently uploading
+                    final isUploading = activeUploads.containsKey(name);
+                    final progress = activeUploads[name] ?? 0.0;
+
+                    return Card(
+                      margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      clipBehavior: Clip.antiAlias, // Ensures progress bar corners match card
+                      child: Column(
+                        children: [
+                          ListTile(
+                            leading: const Icon(Icons.folder, color: Colors.amber, size: 36),
+                            title: Text(name),
+                            subtitle: Text(isUploading 
+                                ? "Uploading... ${(progress * 100).toInt()}%" 
+                                : "Includes LiDAR, Video, IMU"),
+                            trailing: isUploading
+                                ? IconButton(
+                                    icon: const Icon(Icons.cancel, color: Colors.red),
+                                    onPressed: () => _dropbox.cancelUpload(name),
+                                  )
+                                : IconButton(
+                                    icon: const Icon(Icons.cloud_upload, color: Colors.blue),
+                                    onPressed: () => _startUpload(folder),
+                                  ),
+                            onTap: () => Navigator.push(
+                              context,
+                              MaterialPageRoute(builder: (_) => FileBrowserPage(directory: folder)),
+                            ),
+                          ),
+                          // The Persistent Progress Bar
+                          if (isUploading)
+                            LinearProgressIndicator(
+                              value: progress,
+                              backgroundColor: Colors.grey[200],
+                              valueColor: const AlwaysStoppedAnimation<Color>(Colors.blue),
+                              minHeight: 4,
+                            ),
+                        ],
+                      ),
+                    );
+                  },
                 );
               },
             ),
@@ -237,6 +328,9 @@ class _SessionGalleryPageState extends State<SessionGalleryPage> {
 
 /* ─────────────────────────────────────────────────────────────
    FILE BROWSER PAGE
+   ───────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────
+   FILE BROWSER PAGE (Updated)
    ───────────────────────────────────────────────────────────── */
 class FileBrowserPage extends StatelessWidget {
   final Directory directory;
@@ -254,15 +348,27 @@ class FileBrowserPage extends StatelessWidget {
         itemBuilder: (ctx, i) {
           final file = files[i];
           final fileName = file.path.split('/').last;
+          
           final isVideo = fileName.endsWith('.mov') || fileName.endsWith('.mp4');
+          final isLidar = fileName.endsWith('.raw'); // Detect LiDAR
 
           return ListTile(
             leading: Icon(
-              isVideo ? Icons.play_circle_fill : Icons.insert_drive_file,
-              color: isVideo ? Colors.red : Colors.blueGrey,
+              isLidar ? Icons.image : (isVideo ? Icons.play_circle_fill : Icons.insert_drive_file),
+              color: isLidar ? Colors.purple : (isVideo ? Colors.red : Colors.blueGrey),
             ),
             title: Text(fileName),
             subtitle: Text("${(file.lengthSync() / 1024).toStringAsFixed(1)} KB"),
+            onTap: () {
+              if (isLidar) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => LidarHeatmapViewer(file: file),
+                  ),
+                );
+              }
+            },
           );
         },
       ),
