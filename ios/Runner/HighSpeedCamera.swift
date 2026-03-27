@@ -45,6 +45,7 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
     internal var audioRecorder: AVAudioRecorder?
 
     internal var customSaveRootURL: URL?
+    internal var frameCount = 0
 
     func setSaveRoot(path: String) {
         let url = URL(fileURLWithPath: path)
@@ -65,6 +66,45 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
                 print("SYNRA: Failed to create bookmark: \(error)")
             }
         }
+    }
+
+    func calculateHistograms(_ pixelBuffer: CVPixelBuffer) -> [String: [Int]] {
+        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        let bpr = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        guard let base = CVPixelBufferGetBaseAddress(pixelBuffer) else { return [:] }
+
+        var brightnessHist = [Int](repeating: 0, count: 256)
+        var edgeHist = [Int](repeating: 0, count: 256)
+
+        let ptr = base.assumingMemoryBound(to: UInt8.self)
+
+        // Sample every 4th pixel for performance
+        for y in stride(from: 0, to: height, by: 4) {
+            for x in stride(from: 0, to: width, by: 4) {
+                let offset = y * bpr + x * 4
+                let b = Int(ptr[offset])
+                let g = Int(ptr[offset + 1])
+                let r = Int(ptr[offset + 2])
+
+                // 1. Brightness (Luminance)
+                let gray = (r * 299 + g * 587 + b * 114) / 1000
+                brightnessHist[gray] += 1
+
+                // 2. Simple Edge Detection (Sobel-lite)
+                // Compare current pixel to the one next to it
+                if x < width - 4 {
+                    let nextB = Int(ptr[offset + 4])
+                    let diff = abs(b - nextB)
+                    edgeHist[min(diff, 255)] += 1
+                }
+            }
+        }
+
+        return ["brightness": brightnessHist, "edges": edgeHist]
     }
 
     // 3. Add this new function to call on app boot

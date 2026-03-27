@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:synra/pages/camera/histogram_painter.dart';
 import 'setup_page_logic.dart'; 
 import 'setup_ui_components.dart';
 
@@ -118,7 +119,19 @@ class _SetupPageState extends SetupPageLogic {
             Positioned(
               bottom: isLandscape ? 20 : 125, 
               right: 20, 
-              child: SetupUI.build6AxisHUD(s)
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  // --- Visual Analysis Section ---
+                  _buildHistogramBox("EXP / SATURATION", brightnessData, Colors.white70),
+                  const SizedBox(height: 8),
+                  _buildHistogramBox("FOCUS / EDGES", edgeData, Colors.cyanAccent),
+                  const SizedBox(height: 15),
+                  
+                  // Existing IMU HUD
+                  SetupUI.build6AxisHUD(s),
+                ],
+              )
             ),
 
             // 6. RECORDING TRIGGER
@@ -138,6 +151,31 @@ class _SetupPageState extends SetupPageLogic {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _buildHistogramBox(String label, List<int> data, Color color) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label, style: const TextStyle(color: Colors.white38, fontSize: 8, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 4),
+        Container(
+          width: 120, 
+          height: 35,
+          decoration: BoxDecoration(
+            color: Colors.black45,
+            borderRadius: BorderRadius.circular(4),
+            border: Border.all(color: Colors.white10, width: 0.5),
+          ),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: CustomPaint(
+              painter: HistogramPainter(data, color.withOpacity(0.5)),
+            ),
+          ),
+        ),
+      ],
     );
   }
 

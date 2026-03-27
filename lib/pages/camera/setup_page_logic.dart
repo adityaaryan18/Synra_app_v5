@@ -13,6 +13,8 @@ abstract class SetupPageLogic extends State<SetupPage> {
   bool isLocked = false;
   String expName = "Unnamed Experiment";
   String expDesc = "";
+  List<int> brightnessData = [];
+  List<int> edgeData = [];
 
   // --- NEW: Warning Properties ---
   String? errorMessage;
@@ -33,9 +35,30 @@ abstract class SetupPageLogic extends State<SetupPage> {
     
     CameraLogic.channel.setMethodCallHandler((call) async {
       if (call.method == "onFocusChanged") {
-        setState(() {
-          c.selectedFocus = (call.arguments as num).toDouble();
-        });
+        setState(() => c.selectedFocus = (call.arguments as num).toDouble());
+      } 
+      // --- NEW: Handle Histogram Data ---
+      else if (call.method == "onHistogramUpdate") {
+        // --- DEBUG PRINT 3: Check Dart Reception ---
+        final Map<dynamic, dynamic> args = call.arguments;
+        final List<dynamic>? bright = args['brightness'];
+        
+        if (bright != null && bright.isNotEmpty) {
+          // Find the highest peak in the histogram to see if it's changing
+          int peakValue = 0;
+          for (var val in bright) {
+            if ((val as int) > peakValue) peakValue = val;
+          }
+          
+          debugPrint("DART: Received Histogram. Bin Count: ${bright.length}, Peak Value: $peakValue");
+          
+          setState(() {
+            brightnessData = bright.cast<int>();
+            edgeData = (args['edges'] as List<dynamic>).cast<int>();
+          });
+        } else {
+          debugPrint("DART ERROR: Received histogram call but data was NULL or EMPTY");
+        }
       }
     });
 

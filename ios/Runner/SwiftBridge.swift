@@ -5,19 +5,24 @@ import UIKit
     private let camera = HighSpeedCamera()
     private let registrar: FlutterPluginRegistrar
     
-    static var sharedChannel: FlutterMethodChannel?
+    // CHANGE THIS: Add the word 'static'
+    public static var sharedChannel: FlutterMethodChannel? 
 
-    init(registrar: FlutterPluginRegistrar) {
+    public init(registrar: FlutterPluginRegistrar) {
         self.registrar = registrar
         super.init()
     }
 
     @objc public static func register(with registrar: FlutterPluginRegistrar) {
         let channel = FlutterMethodChannel(name: "synra/camera", binaryMessenger: registrar.messenger())
+        
+        // Now this line works because sharedChannel is static!
         SwiftBridge.sharedChannel = channel
         
         let instance = SwiftBridge(registrar: registrar)
         registrar.addMethodCallDelegate(instance, channel: channel)
+        
+        print("SWIFT: Bridge Registered and Static Channel Assigned.")
     }
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
