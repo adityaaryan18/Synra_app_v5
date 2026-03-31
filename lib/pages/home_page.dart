@@ -20,14 +20,26 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    // CRITICAL: Sync the save path with Native as soon as the app starts
     _syncSavePathWithNative();
+    _performFullAppReset();
+  }
+
+  Future<void> _performFullAppReset() async {
+    try {
+      await CameraLogic.channel.invokeMethod('stop'); 
+      // 1. Restore folder permissions (Your existing logic)
+      await CameraLogic.channel.invokeMethod('restorePermission');
+      debugPrint("SYNRA: Full App Reset Performed");
+    } catch (e) {
+      debugPrint("SYNRA: Reset Error: $e");
+    }
   }
 
   Future<void> _syncSavePathWithNative() async {
     try {
       // Tell Swift: "Check your own internal UserDefaults for the security bookmark"
       await CameraLogic.channel.invokeMethod('restorePermission');
+      
       
       // Keep your existing log if you want
       final prefs = await SharedPreferences.getInstance();

@@ -125,6 +125,10 @@ import UIKit
         case "restorePermission":
             camera.restoreSavedBookmark()
             result(true)
+
+        case "resetSession":
+            camera.stopRecording(completion: nil) 
+            result(true)
             
         default:
             result(FlutterMethodNotImplemented)

@@ -373,6 +373,12 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
 
 // Added completion block to pass the file path back to Flutter
     func stopRecording(completion: ((String?) -> Void)? = nil) {
+
+        if !isRecording && writer == nil {
+            self.currentSessionFolderURL = nil 
+            completion?(nil)
+            return
+        }
         // 1. Immediate state change to stop the frame buffer
         isRecording = false
         motionManager.stopDeviceMotionUpdates()
@@ -385,34 +391,36 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
         let outputURL = self.writer?.outputURL
 
         queue.async {
-            self.writerInput?.markAsFinished()
-            self.writer?.finishWriting { [weak self] in
-                guard let self = self else { 
-                    completion?(nil)
-                    return 
-                }
-                
-                if let url = outputURL {
-                    // Save to Photos and write the IMU metadata
-                    self.saveToLibrary(url: url)
-                    self.saveIMUDataSidecar(videoURL: url)
-                    
-                    // Return the path to the completion handler
-                    DispatchQueue.main.async {
-                        completion?(url.path)
+            // 2. CRITICAL GUARD: Only finish if the writer is actually in 'writing' status (1)
+            if let writer = self.writer, writer.status == .writing {
+                self.writerInput?.markAsFinished()
+                writer.finishWriting { [weak self] in
+                    guard let self = self else { return }
+                    if let url = outputURL {
+                        self.saveToLibrary(url: url)
+                        self.saveIMUDataSidecar(videoURL: url)
                     }
-                } else {
-                    DispatchQueue.main.async { completion?(nil) }
+                    self.cleanupAfterSession()
+                    DispatchQueue.main.async { completion?(outputURL?.path) }
                 }
-
-                // Cleanup
-                self.currentSessionFolderURL = nil 
-                self.writer = nil
-                self.writerInput = nil
+            } else {
+                // 3. If writer is already finished (status 2) or failed, just cleanup
+                self.cleanupAfterSession()
+                DispatchQueue.main.async { completion?(nil) }
+            }
             }
         }
-    }
     
+    
+    // Helper to keep code clean
+    private func cleanupAfterSession() {
+        self.writer = nil
+        self.writerInput = nil
+        self.currentSessionFolderURL = nil 
+        self.experimentName = ""
+        self.experimentDesc = ""
+    }
+
     func configureWriter(fps: Int) {
         guard let folder = currentSessionFolderURL else { return }
         let url = folder.appendingPathComponent("video_4K_120_ProRes.mov")
@@ -568,19 +576,64 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
          }
     
     func captureLidarProfile(completion: @escaping () -> Void) {
+        // 1. Prepare folder and state before jumping to background thread
         self.createSessionFolder()
+        self.depthCompletion = completion
+        self.captureDepthOnce = true
+        
         queue.async {
-            guard let device = AVCaptureDevice.default(.builtInLiDARDepthCamera, for: .video, position: .back) else { completion(); return }
-            let session = AVCaptureSession()
-            session.beginConfiguration()
-            if let input = try? AVCaptureDeviceInput(device: device), session.canAddInput(input) { session.addInput(input) }
-            self.depthOutput.setDelegate(self, callbackQueue: self.queue)
-            if session.canAddOutput(self.depthOutput) { session.addOutput(self.depthOutput) }
-            session.commitConfiguration()
-            self.depthSession = session
-            self.depthCompletion = completion
-            self.captureDepthOnce = true
-            session.startRunning()
+            // 2. RELEASE HARDWARE: High-speed video and LiDAR cannot share the ISP.
+            // We MUST stop the main preview session to allow the LiDAR hardware to initialize.
+            if self.session.isRunning {
+                print("SWIFT: Pausing main preview for LiDAR capture...")
+                self.session.stopRunning()
+                // Tiny sleep to allow the hardware clock to settle
+                Thread.sleep(forTimeInterval: 0.1) 
+            }
+
+            guard let device = AVCaptureDevice.default(.builtInLiDARDepthCamera, for: .video, position: .back) else {
+                print("SWIFT: LiDAR Hardware missing or unsupported")
+                DispatchQueue.main.async { completion() }
+                return 
+            }
+
+            let lSession = AVCaptureSession()
+            lSession.beginConfiguration()
+            
+            do {
+                let input = try AVCaptureDeviceInput(device: device)
+                if lSession.canAddInput(input) { lSession.addInput(input) }
+                
+                self.depthOutput.setDelegate(self, callbackQueue: self.queue)
+                if lSession.canAddOutput(self.depthOutput) { lSession.addOutput(self.depthOutput) }
+                
+                lSession.commitConfiguration()
+                self.depthSession = lSession
+                
+                print("SWIFT: Starting LiDAR Session...")
+                lSession.startRunning()
+
+                // 3. SAFETY TIMEOUT: If no depth frame is received in 3.5s, unblock Flutter.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+                    guard let self = self else { return }
+                    if self.depthCompletion != nil {
+                        print("SWIFT: LiDAR Capture Timeout - Reverting to Preview")
+                        self.depthCompletion?()
+                        self.depthCompletion = nil
+                        
+                        self.queue.async {
+                            self.depthSession?.stopRunning()
+                            self.depthSession = nil
+                            self.session.startRunning() // Resume preview so UI isn't dead
+                        }
+                    }
+                }
+            } catch {
+                print("SWIFT: LiDAR Setup Failed: \(error)")
+                self.session.startRunning()
+                DispatchQueue.main.async { completion() }
+            }
         }
+        print("1.5 - Capture Logic Initialized")
     }
 }

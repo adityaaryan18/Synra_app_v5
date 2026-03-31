@@ -20,7 +20,6 @@ extension HighSpeedCamera: AVCaptureVideoDataOutputSampleBufferDelegate {
             if let bright = metrics["brightness"], let edges = metrics["edges"] {
                 let maxBright = bright.max() ?? 0
                 let totalEdges = edges.reduce(0, +)
-                print("SWIFT: Histogram Gen -> Max Bin: \(maxBright), Total Edge Energy: \(totalEdges)")
                 
                 // --- DEBUG PRINT 2: Check Bridge Status ---
                 if SwiftBridge.sharedChannel == nil {

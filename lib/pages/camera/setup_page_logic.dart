@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:synra/pages/home_page.dart';
 import 'setup_page.dart';
 import 'camera_logic.dart';
 import 'sensor_logic.dart';
@@ -50,8 +51,6 @@ abstract class SetupPageLogic extends State<SetupPage> {
           for (var val in bright) {
             if ((val as int) > peakValue) peakValue = val;
           }
-          
-          debugPrint("DART: Received Histogram. Bin Count: ${bright.length}, Peak Value: $peakValue");
           
           setState(() {
             brightnessData = bright.cast<int>();
@@ -195,6 +194,7 @@ abstract class SetupPageLogic extends State<SetupPage> {
                 child: Text(
                   "RECORDING STOPPED\nDevice too unstable. Please hold steady.",
                   style: TextStyle(color: Colors.white, fontSize: 11, fontWeight: FontWeight.bold),
+
                 ),
               ),
               GestureDetector(
@@ -225,19 +225,25 @@ abstract class SetupPageLogic extends State<SetupPage> {
         });
         c.showProcessingDialog(context, "Initializing 4K 120FPS ProRes..."); 
         try {
-          await CameraLogic.channel.invokeMethod('updateMetadata', {
-          'name': expName, 
-          'desc': expDesc,
+        bool metaSuccess = await CameraLogic.channel.invokeMethod('updateMetadata', {
+            'name': expName, 
+            'desc': expDesc,
           });
+          if (!metaSuccess) throw Exception("Metadata failed to initialize");
+          print("Step 1: Metadata Bound");
+
           await CameraLogic.channel.invokeMethod('getLidarProfile');
-          await Future.delayed(const Duration(milliseconds: 300));
+          print("Step 2: LiDAR Profile Captured");
+
+          await Future.delayed(const Duration(milliseconds: 500));
           
-          // This will throw an error if the device doesn't support 120fps
+
           await CameraLogic.channel.invokeMethod('start', {
             'fps': 120,
             'name': expName, 
             'desc': expDesc,
           });
+          print("Step 3: 4K 120FPS Recording Active");
           
           await CameraLogic.channel.invokeMethod('setLock', true);
           if (mounted) Navigator.of(context, rootNavigator: true).pop();
@@ -247,6 +253,8 @@ abstract class SetupPageLogic extends State<SetupPage> {
             c.isProcessing = false;
             isLocked = true; 
           });
+          print("5");
+
         } catch (e) {
           if (mounted) Navigator.of(context, rootNavigator: true).pop();
           setState(() {
@@ -254,6 +262,7 @@ abstract class SetupPageLogic extends State<SetupPage> {
             errorMessage = "HARDWARE NOT COMPATIBLE\n4K 120FPS is not supported on this device.";
           });
         }
+        print("debug print");
       } else {
         setState(() { c.isProcessing = true; });
         try {
@@ -265,11 +274,55 @@ abstract class SetupPageLogic extends State<SetupPage> {
             c.isProcessing = false;
             isLocked = false;
           });
+
+          _showSuccessDialog();
         } catch (e) { 
           setState(() => c.isProcessing = false); 
+          debugPrint("Stop Recording Error: $e");
         }
       }
     }
+
+    Future<void> _showSuccessDialog() async {
+    return showDialog(
+      context: context,
+      barrierDismissible: false, // Prevent dismissing by tapping outside
+      builder: (BuildContext context) {
+        return AlertDialog(
+          backgroundColor: Colors.grey[900],
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+          title: const Row(
+            children: [
+              Icon(Icons.check_circle, color: Colors.greenAccent),
+              SizedBox(width: 10),
+              Text("Session Saved", style: TextStyle(color: Colors.white)),
+            ],
+          ),
+          content: Text(
+            "Experiment '$expName' has been exported in 4K 120FPS ProRes to your gallery and session folder.",
+            style: const TextStyle(color: Colors.white70),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                // 1. Close the dialog
+                Navigator.of(context).pop();
+
+                Navigator.of(context).pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (context) => const HomePage()),
+                  (route) => false, // This deletes ALL previous pages from memory
+                );
+              },
+              child: const Text(
+                "OK", 
+                style: TextStyle(color: Colors.cyanAccent, fontWeight: FontWeight.bold)
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   void updateActive(String label) {
     if (isLocked) return; 
