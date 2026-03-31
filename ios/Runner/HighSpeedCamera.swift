@@ -46,6 +46,7 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
 
     internal var customSaveRootURL: URL?
     internal var frameCount = 0
+    internal var allowVibration: Bool = false
 
     func setSaveRoot(path: String) {
         let url = URL(fileURLWithPath: path)
@@ -370,30 +371,47 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
         session.commitConfiguration()
     }
 
-    func stopRecording() {
-            isRecording = false
-            motionManager.stopDeviceMotionUpdates()
-            altimeter.stopRelativeAltitudeUpdates()
+// Added completion block to pass the file path back to Flutter
+    func stopRecording(completion: ((String?) -> Void)? = nil) {
+        // 1. Immediate state change to stop the frame buffer
+        isRecording = false
+        motionManager.stopDeviceMotionUpdates()
+        altimeter.stopRelativeAltitudeUpdates()
 
-            audioRecorder?.stop()
-            audioRecorder = nil
-            
-            queue.async {
-                self.writerInput?.markAsFinished()
-                self.writer?.finishWriting { [weak self] in
-                    guard let self = self, let url = self.writer?.outputURL else { return }
-                    
+        audioRecorder?.stop()
+        audioRecorder = nil
+        
+        // Capture the URL before we nil out the writer
+        let outputURL = self.writer?.outputURL
+
+        queue.async {
+            self.writerInput?.markAsFinished()
+            self.writer?.finishWriting { [weak self] in
+                guard let self = self else { 
+                    completion?(nil)
+                    return 
+                }
+                
+                if let url = outputURL {
+                    // Save to Photos and write the IMU metadata
                     self.saveToLibrary(url: url)
                     self.saveIMUDataSidecar(videoURL: url)
                     
-
-                    self.currentSessionFolderURL = nil 
-                    
-                    self.writer = nil
-                    self.writerInput = nil
+                    // Return the path to the completion handler
+                    DispatchQueue.main.async {
+                        completion?(url.path)
+                    }
+                } else {
+                    DispatchQueue.main.async { completion?(nil) }
                 }
+
+                // Cleanup
+                self.currentSessionFolderURL = nil 
+                self.writer = nil
+                self.writerInput = nil
             }
         }
+    }
     
     func configureWriter(fps: Int) {
         guard let folder = currentSessionFolderURL else { return }

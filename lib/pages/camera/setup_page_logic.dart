@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:sensors_plus/sensors_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'setup_page.dart';
 import 'camera_logic.dart';
 import 'sensor_logic.dart';
@@ -113,29 +114,42 @@ abstract class SetupPageLogic extends State<SetupPage> {
     }
   }
 
-  void initIMU() {
-    s.aSub = accelerometerEvents.listen((e) {
-      s.a = e;
-      bool currentlyStable = s.updateStability();
+  void initIMU() async {
+      // 1. Fetch the user's stability preference from storage
+      final prefs = await SharedPreferences.getInstance();
       
-      // AUTO-STOP LOGIC: If recording and motion is extremely unstable
-      if (c.recording && !currentlyStable) {
-        if (!showStabilityWarning) {
-          setState(() => showStabilityWarning = true);
-          // Force stop the recording if it's too shaky
-          toggle(); 
+      s.aSub = accelerometerEvents.listen((e) {
+        s.a = e;
+        bool currentlyStable = s.updateStability();
+        
+        // 2. Retrieve current setting (Default to false/Strict if not found)
+        bool allowVibration = prefs.getBool('allow_vibration') ?? false;
+        
+        // 3. AUTO-STOP LOGIC: Only trigger if:
+        // - We are recording
+        // - The device is unstable
+        // - The user has NOT allowed vibration in settings
+        if (c.recording && !currentlyStable && !allowVibration) {
+          if (!showStabilityWarning) {
+            setState(() => showStabilityWarning = true);
+            // Only stop if the user hasn't overridden the stability requirement
+            toggle(); 
+          }
         }
-      }
+        
+        // 4. Optimization: Only call setState if the stability status actually changed
+        if (s.isStable != currentlyStable) {
+          setState(() => s.isStable = currentlyStable);
+        }
+      });
       
-      setState(() => s.isStable = currentlyStable);
-    });
-    
-    s.gSub = gyroscopeEvents.listen((e) { 
-      s.g = e; 
-      s.updateStability(); 
-      setState(() {}); 
-    });
-  }
+      s.gSub = gyroscopeEvents.listen((e) { 
+        s.g = e; 
+        s.updateStability(); 
+        // Removed the empty setState() here to prevent 100Hz UI rebuilds 
+        // which can cause lag during 4K 120FPS preview.
+      });
+    }     
 
   // NEW: Warning Overlay Widget
   Widget buildWarningOverlay() {
@@ -196,63 +210,66 @@ abstract class SetupPageLogic extends State<SetupPage> {
   }
 
   Future<void> toggle() async {
-    if ((!s.isStable && !c.recording) || c.isProcessing) return;
-    HapticFeedback.mediumImpact();
-    
-    if (!c.recording) {
-      setState(() { 
-        c.isProcessing = true; 
-        c.activeSetting = null; 
-        showStabilityWarning = false;
-        errorMessage = null;
-      });
-      c.showProcessingDialog(context, "Initializing 4K 120FPS ProRes..."); 
-      try {
-        await CameraLogic.channel.invokeMethod('updateMetadata', {
-        'name': expName, 
-        'desc': expDesc,
+      if ((!s.isStable && !c.recording) || c.isProcessing) {
+        if (!c.recording) return; 
+      }
+      
+      HapticFeedback.mediumImpact();
+      
+      if (!c.recording) {
+        setState(() { 
+          c.isProcessing = true; 
+          c.activeSetting = null; 
+          showStabilityWarning = false;
+          errorMessage = null;
         });
-        await CameraLogic.channel.invokeMethod('getLidarProfile');
-        await Future.delayed(const Duration(milliseconds: 300));
-        
-        // This will throw an error if the device doesn't support 120fps
-        await CameraLogic.channel.invokeMethod('start', {
-          'fps': 120,
+        c.showProcessingDialog(context, "Initializing 4K 120FPS ProRes..."); 
+        try {
+          await CameraLogic.channel.invokeMethod('updateMetadata', {
           'name': expName, 
           'desc': expDesc,
-        });
-        
-        await CameraLogic.channel.invokeMethod('setLock', true);
-        if (mounted) Navigator.of(context, rootNavigator: true).pop();
-        c.startTimer(() => setState(() {}));
-        setState(() { 
-          c.recording = true; 
-          c.isProcessing = false;
-          isLocked = true; 
-        });
-      } catch (e) {
-        if (mounted) Navigator.of(context, rootNavigator: true).pop();
-        setState(() {
-          c.isProcessing = false;
-          errorMessage = "HARDWARE NOT COMPATIBLE\n4K 120FPS is not supported on this device.";
-        });
-      }
-    } else {
-      setState(() { c.isProcessing = true; });
-      try {
-        await CameraLogic.channel.invokeMethod('stop');
-        await CameraLogic.channel.invokeMethod('setLock', false);
-        c.stopTimer();
-        setState(() { 
-          c.recording = false; 
-          c.isProcessing = false;
-          isLocked = false;
-        });
-      } catch (e) { 
-        setState(() => c.isProcessing = false); 
+          });
+          await CameraLogic.channel.invokeMethod('getLidarProfile');
+          await Future.delayed(const Duration(milliseconds: 300));
+          
+          // This will throw an error if the device doesn't support 120fps
+          await CameraLogic.channel.invokeMethod('start', {
+            'fps': 120,
+            'name': expName, 
+            'desc': expDesc,
+          });
+          
+          await CameraLogic.channel.invokeMethod('setLock', true);
+          if (mounted) Navigator.of(context, rootNavigator: true).pop();
+          c.startTimer(() => setState(() {}));
+          setState(() { 
+            c.recording = true; 
+            c.isProcessing = false;
+            isLocked = true; 
+          });
+        } catch (e) {
+          if (mounted) Navigator.of(context, rootNavigator: true).pop();
+          setState(() {
+            c.isProcessing = false;
+            errorMessage = "HARDWARE NOT COMPATIBLE\n4K 120FPS is not supported on this device.";
+          });
+        }
+      } else {
+        setState(() { c.isProcessing = true; });
+        try {
+          await CameraLogic.channel.invokeMethod('stop');
+          await CameraLogic.channel.invokeMethod('setLock', false);
+          c.stopTimer();
+          setState(() { 
+            c.recording = false; 
+            c.isProcessing = false;
+            isLocked = false;
+          });
+        } catch (e) { 
+          setState(() => c.isProcessing = false); 
+        }
       }
     }
-  }
 
   void updateActive(String label) {
     if (isLocked) return; 

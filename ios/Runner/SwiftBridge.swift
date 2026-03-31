@@ -24,6 +24,7 @@ import UIKit
         
         print("SWIFT: Bridge Registered and Static Channel Assigned.")
     }
+    
 
     public func handle(_ call: FlutterMethodCall, result: @escaping FlutterResult) {
         // Extract arguments as a dictionary for easier access
@@ -113,7 +114,14 @@ import UIKit
         case "updateZoom":
             if let zoom = call.arguments as? Double { camera.updateZoom(CGFloat(zoom)) }
             result(true)
-
+        
+        case "setStabilityIgnore":
+            if let allow = call.arguments as? Bool {
+                // Use 'self.camera' to ensure we update the active instance
+                self.camera.allowVibration = allow 
+                print("SWIFT DEBUG: Stability Ignore set to \(allow)")
+                result(nil)
+            }
         case "restorePermission":
             camera.restoreSavedBookmark()
             result(true)

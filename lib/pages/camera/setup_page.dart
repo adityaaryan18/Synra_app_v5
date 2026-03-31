@@ -179,19 +179,78 @@ class _SetupPageState extends SetupPageLogic {
     );
   }
 
-  Widget _buildMiniMap() {
+Widget _buildMiniMap() {
+    const double mapWidth = 100.0;
+    const double mapHeight = 140.0;
+    
+    const double indicatorWidth = 30.0;
+    const double indicatorHeight = 42.0;
+
     return Container(
-      width: 100, height: 140,
+      width: mapWidth,
+      height: mapHeight,
       decoration: BoxDecoration(
         border: Border.all(color: Colors.white.withOpacity(0.5), width: 1.5),
         borderRadius: BorderRadius.circular(12),
+        color: Colors.black,
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(10),
         child: Stack(
+          alignment: Alignment.center,
           children: [
-            Opacity(opacity: 0.5, child: Transform.scale(scale: 1.0 / c.zoomFactor, child: Texture(textureId: textureId!))),
-            Center(child: Container(width: 100 / c.zoomFactor, height: 140 / c.zoomFactor, decoration: BoxDecoration(border: Border.all(color: Colors.red, width: 2)))),
+            // 1. BACKGROUND FEED
+            Positioned.fill(
+              child: Opacity(
+                opacity: 0.5,
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  child: SizedBox(
+                    width: mapWidth,
+                    height: mapHeight,
+                    child: Texture(textureId: textureId!),
+                  ),
+                ),
+              ),
+            ),
+
+            // 2. FIXED RED BOX (No Squeezing)
+            Container(
+              width: indicatorWidth,
+              height: indicatorHeight,
+              decoration: BoxDecoration(
+                border: Border.all(color: Colors.redAccent, width: 2.0),
+              ),
+            ),
+
+            // 3. ZOOM LEVEL TEXT OVERLAY
+            // Positioned at the bottom of the Mini-Map
+            Positioned(
+              bottom: 6,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.7),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text(
+                  "${c.zoomFactor.toStringAsFixed(1)}x",
+                  style: const TextStyle(
+                    color: Colors.cyanAccent,
+                    fontSize: 9,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ),
+
+            // Center Point
+            Container(
+              width: 3,
+              height: 3,
+              decoration: const BoxDecoration(color: Colors.redAccent, shape: BoxShape.circle),
+            ),
           ],
         ),
       ),
