@@ -9,7 +9,7 @@ class AnalysisPage extends StatelessWidget {
       appBar: AppBar(title: const Text('Previous Analysis')),
       body: const Center(
         child: Text(
-          'List of previous analyses will appear here',
+          'List of previous analyses will appear here (UNDER DEVELOPMENT)',
           style: TextStyle(fontSize: 16),
         ),
       ),

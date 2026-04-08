@@ -48,6 +48,46 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
     internal var frameCount = 0
     internal var allowVibration: Bool = false
 
+    func takeSnapshot(completion: @escaping (String?) -> Void) {
+        guard let pixelBuffer = latestPixelBuffer else {
+            completion(nil)
+            return
+        }
+
+        // 1. Ensure the session folder and 'snapshots' subfolder exist
+        self.createSessionFolder()
+        guard let sessionURL = currentSessionFolderURL else { return }
+        let snapshotsFolder = sessionURL.appendingPathComponent("snapshots")
+        
+        try? FileManager.default.createDirectory(at: snapshotsFolder, withIntermediateDirectories: true)
+
+        // 2. Convert PixelBuffer to Image
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+        let context = CIContext()
+        
+        // 3. Generate filename based on timestamp
+        let formatter = DateFormatter()
+        formatter.dateFormat = "HHmmss_SSS"
+        let filename = "SNAP_\(formatter.string(from: Date())).jpg"
+        let fileURL = snapshotsFolder.appendingPathComponent(filename)
+
+        queue.async {
+            if let jpegData = context.jpegRepresentation(of: ciImage, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [:]) {
+                do {
+                    try jpegData.write(to: fileURL)
+                    // Also save to Photo Library for convenience
+                    PHPhotoLibrary.shared().performChanges({
+                        PHAssetChangeRequest.creationRequestForAssetFromImage(atFileURL: fileURL)
+                    })
+                    DispatchQueue.main.async { completion(fileURL.path) }
+                } catch {
+                    print("Snapshot Save Error: \(error)")
+                    DispatchQueue.main.async { completion(nil) }
+                }
+            }
+        }
+    }
+
     func setSaveRoot(path: String) {
         let url = URL(fileURLWithPath: path)
         
@@ -373,43 +413,58 @@ final class HighSpeedCamera: NSObject, FlutterTexture, CLLocationManagerDelegate
 
 // Added completion block to pass the file path back to Flutter
     func stopRecording(completion: ((String?) -> Void)? = nil) {
-
-        if !isRecording && writer == nil {
-            self.currentSessionFolderURL = nil 
+        // 1. Thread-safe check: Are we actually recording?
+        // We check this on the main thread immediately to stop the UI/Timer
+        guard isRecording else {
             completion?(nil)
             return
         }
-        // 1. Immediate state change to stop the frame buffer
+
+        // 2. Immediate state change to stop the frame buffer and sensors
         isRecording = false
         motionManager.stopDeviceMotionUpdates()
         altimeter.stopRelativeAltitudeUpdates()
-
         audioRecorder?.stop()
         audioRecorder = nil
-        
-        // Capture the URL before we nil out the writer
-        let outputURL = self.writer?.outputURL
 
-        queue.async {
-            // 2. CRITICAL GUARD: Only finish if the writer is actually in 'writing' status (1)
-            if let writer = self.writer, writer.status == .writing {
-                self.writerInput?.markAsFinished()
+        // 3. Move to the dedicated hardware queue for the heavy lifting
+        queue.async { [weak self] in
+            guard let self = self, let writer = self.writer else {
+                DispatchQueue.main.async { completion?(nil) }
+                return
+            }
+
+            // 4. Capture output URL locally
+            let outputURL = writer.outputURL
+
+            // 5. MARK AS FINISHED: This tells the writer no more frames are coming.
+            // This MUST happen before finishWriting.
+            self.writerInput?.markAsFinished()
+
+            // 6. Check status explicitly on the queue
+            if writer.status == .writing {
                 writer.finishWriting { [weak self] in
                     guard let self = self else { return }
-                    if let url = outputURL {
-                        self.saveToLibrary(url: url)
-                        self.saveIMUDataSidecar(videoURL: url)
+                    
+                    // Only save if the writer actually finished successfully
+                    if writer.status == .completed {
+                        self.saveToLibrary(url: outputURL)
+                        self.saveIMUDataSidecar(videoURL: outputURL)
+                        print("SYNRA: Session saved successfully at \(outputURL.path)")
+                    } else {
+                        print("SYNRA: Writer failed to finish: \(String(describing: writer.error))")
                     }
+
                     self.cleanupAfterSession()
-                    DispatchQueue.main.async { completion?(outputURL?.path) }
+                    DispatchQueue.main.async { completion?(outputURL.path) }
                 }
             } else {
-                // 3. If writer is already finished (status 2) or failed, just cleanup
+                // If it's already failed or cancelled, just clean up
                 self.cleanupAfterSession()
                 DispatchQueue.main.async { completion?(nil) }
             }
-            }
         }
+    }
     
     
     // Helper to keep code clean

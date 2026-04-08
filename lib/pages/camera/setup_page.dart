@@ -135,16 +135,37 @@ class _SetupPageState extends SetupPageLogic {
             ),
 
             // 6. RECORDING TRIGGER
+            // 6. RECORDING TRIGGER & SNAPSHOT
             Positioned(
               bottom: isLandscape ? 20 : 45, 
-              left: isLandscape ? 20 : 0, 
-              right: isLandscape ? null : 0,
+              left: 0, 
+              right: 0,
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   SetupUI.buildStabilityIndicator(s.isStable),
-                  const SizedBox(height: 15),
-                  buildRecordButton(),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      // --- SNAPSHOT BUTTON ---
+                      // Only show if NOT recording. Disappears once recording starts.
+                      if (!c.recording) ...[
+                        buildSnapshotButton(
+                          onCapture: captureSnapshot, 
+                          isProcessing: c.isProcessing,
+                        ),
+                        const SizedBox(width: 30), // Gap between Snapshot and Record
+                      ],
+
+                      // --- MAIN RECORD BUTTON ---
+                      buildRecordButton(),
+
+                      // Mirror the gap on the right ONLY when not recording 
+                      // to keep the Record button perfectly centered.
+                      if (!c.recording) const SizedBox(width: 100), // Adjusted for buildSnapshotButton width
+                    ],
+                  ),
                 ],
               ),
             ),

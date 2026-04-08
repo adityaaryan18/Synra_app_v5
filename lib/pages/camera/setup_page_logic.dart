@@ -66,6 +66,27 @@ abstract class SetupPageLogic extends State<SetupPage> {
     initIMU();
   }
 
+  Future<void> captureSnapshot() async {
+    if (c.isProcessing) return; // Prevent spamming during I/O
+
+    HapticFeedback.lightImpact();
+    setState(() => c.isProcessing = true);
+
+    try {
+      // Invoke the native method
+      final String? path = await CameraLogic.channel.invokeMethod('takeSnapshot');
+      
+      if (path != null) {
+        // Optional: Show a brief "flash" effect or overlay
+        debugPrint("Snapshot saved to: $path");
+      }
+    } catch (e) {
+      debugPrint("Snapshot Error: $e");
+    } finally {
+      setState(() => c.isProcessing = false);
+    }
+  }
+
   Future<void> _showMemoDialog() async {
     return showDialog(
       context: context,
@@ -408,6 +429,34 @@ abstract class SetupPageLogic extends State<SetupPage> {
       ),
     );
   }
+
+  Widget buildSnapshotButton({
+    required VoidCallback onCapture,
+    bool isProcessing = false,
+  }) {
+    return GestureDetector(
+      onTap: isProcessing ? null : onCapture,
+      child: Container(
+        height: 70,
+        width: 70,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 3),
+        ),
+        child: Container(
+          margin: const EdgeInsets.all(4),
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            shape: BoxShape.circle,
+          ),
+          child: isProcessing 
+              ? const Center(child: CircularProgressIndicator(color: Colors.black, strokeWidth: 2)) 
+              : const Icon(Icons.camera_alt, color: Colors.black, size: 28),
+        ),
+      ),
+    );
+  }
+
 
   @override
   void dispose() { 

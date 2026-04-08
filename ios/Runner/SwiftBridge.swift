@@ -126,6 +126,16 @@ import UIKit
             camera.restoreSavedBookmark()
             result(true)
 
+        case "takeSnapshot":
+            camera.takeSnapshot { path in
+                if let savedPath = path {
+                    result(savedPath)
+                } else {
+                    result(FlutterError(code: "SNAPSHOT_FAIL", 
+                                        message: "Failed to capture or save frame", 
+                                        details: nil))
+                }
+            }
         case "resetSession":
             camera.stopRecording(completion: nil) 
             result(true)

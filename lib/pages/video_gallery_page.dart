@@ -5,13 +5,15 @@ import 'package:flutter/services.dart'; // For Clipboard
 import 'package:path_provider/path_provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:synra/pages/lidar_heatmap.dart';
+import 'package:synra/pages/video_player_page.dart';
+import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 /* ─────────────────────────────────────────────────────────────
-   DROPBOX SERVICE
+   DROPBOX SERVICE (Updated with Chunked Upload Sessions)
    ───────────────────────────────────────────────────────────── */
 
 class DropboxService {
-  // Singleton pattern to ensure the same instance is used across the app
   static final DropboxService _instance = DropboxService._internal();
   factory DropboxService() => _instance;
   DropboxService._internal();
@@ -20,14 +22,9 @@ class DropboxService {
   final String clientSecret = "jpba0y24qk1r4k8";
   final String refreshToken = "BcEM90FhOq8AAAAAAAAAAR7l7Cr71GboZTWTMV8wrO7f51c7L7MJu_arD4GQikB3";
 
-  // --- PROGRESS TRACKING ---
-  // Key: Folder Name, Value: Progress (0.0 to 1.0)
   final ValueNotifier<Map<String, double>> uploadProgress = ValueNotifier({});
-  
-  // Track active cancel tokens
   final Map<String, bool> _cancelRequests = {};
 
-  /// Call this to stop an ongoing upload
   void cancelUpload(String folderName) {
     _cancelRequests[folderName] = true;
   }
@@ -45,90 +42,167 @@ class DropboxService {
       if (response.statusCode == 200) {
         return jsonDecode(response.body)['access_token'];
       }
-      debugPrint("Auth Error: ${response.body}");
       return null;
     } catch (e) {
-      debugPrint("Network Error: $e");
       return null;
     }
   }
 
-  /// High-level method to upload an entire directory with progress
-  Future<void> uploadSession(
-    Directory folder, {
-    required Function(String url) onComplete,
-    required Function(String error) onError,
-  }) async {
-    final folderName = folder.path.split('/').last;
-    final files = folder.listSync().whereType<File>().toList();
-    
-    if (files.isEmpty) {
-      onError("Folder is empty");
+Future<void> uploadSession(
+  Directory folder, {
+  required Function(String url) onComplete,
+  required Function(String error) onError,
+}) async {
+  final folderName = folder.path.split('/').last;
+  
+  // CHANGE: Set recursive to true to find files in the 'snapshots' folder
+  final allEntities = folder.listSync(recursive: true);
+  final files = allEntities.whereType<File>().toList();
+  
+  if (files.isEmpty) {
+    onError("Folder is empty");
+    return;
+  }
+
+  _cancelRequests[folderName] = false;
+  _updateProgress(folderName, 0.0);
+
+  String remoteRootPath = "/SYNRA ipad App Data/$folderName";
+  
+  int totalBytes = 0;
+  for (var f in files) {
+    totalBytes += f.lengthSync();
+  }
+  int totalBytesSent = 0;
+
+  for (var file in files) {
+    if (_cancelRequests[folderName] == true) {
+      _cleanup(folderName);
+      onError("Upload cancelled");
       return;
     }
 
-    // Initialize state
-    _cancelRequests[folderName] = false;
-    _updateProgress(folderName, 0.0);
-
-    int uploadedCount = 0;
-    String remoteFolderPath = "/SYNRA ipad App Data/$folderName";
-
-    for (var file in files) {
-      // Check for cancellation before each file upload
-      if (_cancelRequests[folderName] == true) {
-        _cleanup(folderName);
-        onError("Upload cancelled");
-        return;
-      }
-
-      final fileName = file.path.split('/').last;
-      bool ok = await uploadFile(file, "$remoteFolderPath/$fileName");
-
-      if (ok) {
-        uploadedCount++;
-        _updateProgress(folderName, uploadedCount / files.length);
-      } else {
-        // If a single file fails, you can choose to continue or abort. 
-        // Here we continue but log it.
-        debugPrint("Failed to upload: $fileName");
-      }
-    }
-
-    // Generate shared link after all files are done
-    String? sharedUrl = await getSharedLink(remoteFolderPath);
+    // CHANGE: Calculate the relative path to preserve the 'snapshots/' folder structure
+    // This turns '.../Session_1/snapshots/image.jpg' into 'snapshots/image.jpg'
+    String relativePath = file.path.split(folderName).last; 
+    String remoteFilePath = "$remoteRootPath$relativePath";
     
-    _cleanup(folderName);
-    
-    if (sharedUrl != null) {
-      onComplete(sharedUrl);
+    bool ok = await _uploadFileInChunks(
+      file, 
+      remoteFilePath, 
+      (bytesSentInFile) {
+        double overallProgress = (totalBytesSent + bytesSentInFile) / totalBytes;
+        _updateProgress(folderName, overallProgress);
+      }
+    );
+
+    if (ok) {
+      totalBytesSent += file.lengthSync();
     } else {
-      onError("Uploaded files but failed to generate sharing link.");
+      debugPrint("Failed to upload: ${file.path}");
     }
   }
 
-  Future<bool> uploadFile(File file, String remotePath) async {
+  // Generate link for the main folder
+  String? sharedUrl = await getSharedLink(remoteRootPath);
+  _cleanup(folderName);
+  
+  if (sharedUrl != null) {
+    onComplete(sharedUrl);
+  } else {
+    onError("Uploaded files but failed to generate sharing link.");
+  }
+}
+
+  /// New Method: Handles Large Files via start/append/finish sessions
+  Future<bool> _uploadFileInChunks(File file, String remotePath, Function(int) onProgress) async {
     final token = await _getAccessToken();
     if (token == null) return false;
 
-    final url = Uri.parse("https://content.dropboxapi.com/2/files/upload");
-    final bytes = await file.readAsBytes();
+    final int fileSize = file.lengthSync();
+    final int chunkSize = 4 * 1024 * 1024; // 4MB chunks
+    final reader = file.openSync();
 
-    final response = await http.post(
-      url,
-      headers: {
-        "Authorization": "Bearer $token",
-        "Dropbox-API-Arg": jsonEncode({
-          "path": remotePath,
-          "mode": "overwrite",
-          "mute": true
-        }),
-        "Content-Type": "application/octet-stream",
-      },
-      body: bytes,
-    );
+    try {
+      // 1. Start Session
+      String sessionId = "";
+      List<int> firstChunk = reader.readSync(chunkSize);
+      
+      final startUrl = Uri.parse("https://content.dropboxapi.com/2/files/upload_session/start");
+      final startRes = await http.post(
+        startUrl,
+        headers: {
+          "Authorization": "Bearer $token",
+          "Dropbox-API-Arg": jsonEncode({"close": false}),
+          "Content-Type": "application/octet-stream",
+        },
+        body: firstChunk,
+      );
 
-    return response.statusCode == 200;
+      if (startRes.statusCode != 200) return false;
+      sessionId = jsonDecode(startRes.body)['session_id'];
+      
+      int uploadedBytes = firstChunk.length;
+      onProgress(uploadedBytes);
+
+      // 2. Append Middle Chunks
+      while (uploadedBytes < fileSize - chunkSize) {
+        List<int> chunk = reader.readSync(chunkSize);
+        final appendUrl = Uri.parse("https://content.dropboxapi.com/2/files/upload_session/append_v2");
+        
+        final appendRes = await http.post(
+          appendUrl,
+          headers: {
+            "Authorization": "Bearer $token",
+            "Dropbox-API-Arg": jsonEncode({
+              "cursor": {"session_id": sessionId, "offset": uploadedBytes},
+              "close": false
+            }),
+            "Content-Type": "application/octet-stream",
+          },
+          body: chunk,
+        );
+
+        if (appendRes.statusCode != 200) return false;
+        uploadedBytes += chunk.length;
+        onProgress(uploadedBytes);
+      }
+
+      // 3. Finish Session
+      List<int> finalChunk = reader.readSync(fileSize - uploadedBytes);
+      final finishUrl = Uri.parse("https://content.dropboxapi.com/2/files/upload_session/finish");
+      
+      final finishRes = await http.post(
+        finishUrl,
+        headers: {
+          "Authorization": "Bearer $token",
+          "Dropbox-API-Arg": jsonEncode({
+            "cursor": {"session_id": sessionId, "offset": uploadedBytes},
+            "commit": {
+              "path": remotePath,
+              "mode": "overwrite",
+              "mute": true,
+              "autorename": true
+            }
+          }),
+          "Content-Type": "application/octet-stream",
+        },
+        body: finalChunk,
+      );
+
+      onProgress(fileSize);
+      return finishRes.statusCode == 200;
+    } catch (e) {
+      debugPrint("Chunk Upload Error: $e");
+      return false;
+    } finally {
+      reader.closeSync();
+    }
+  }
+
+  // Deprecated single-file upload (kept for interface compatibility if needed elsewhere)
+  Future<bool> uploadFile(File file, String remotePath) async {
+    return _uploadFileInChunks(file, remotePath, (p) {});
   }
 
   Future<String?> getSharedLink(String folderPath) async {
@@ -136,7 +210,6 @@ class DropboxService {
     if (token == null) return null;
 
     final url = Uri.parse("https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings");
-    
     final response = await http.post(
       url,
       headers: {
@@ -158,11 +231,9 @@ class DropboxService {
     return null;
   }
 
-  // --- INTERNAL HELPERS ---
-
   void _updateProgress(String key, double value) {
     final current = Map<String, double>.from(uploadProgress.value);
-    current[key] = value;
+    current[key] = value.clamp(0.0, 1.0);
     uploadProgress.value = current;
   }
 
@@ -184,13 +255,36 @@ class SessionGalleryPage extends StatefulWidget {
 class _SessionGalleryPageState extends State<SessionGalleryPage> {
   List<Directory> _sessions = [];
   bool _loading = true;
-  // Use the Singleton instance
   final DropboxService _dropbox = DropboxService();
+  final Map<String, String> _completedUrls = {};
 
   @override
   void initState() {
     super.initState();
     _loadSessions();
+    _loadSavedLinks(); // Load links from storage on startup
+  }
+
+  // NEW: Load saved links from phone storage
+  Future<void> _loadSavedLinks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final keys = prefs.getKeys();
+    setState(() {
+      for (String key in keys) {
+        if (key.startsWith('link_')) {
+          _completedUrls[key.replaceFirst('link_', '')] = prefs.getString(key) ?? "";
+        }
+      }
+    });
+  }
+
+  // NEW: Save link to phone storage
+  Future<void> _saveLink(String folderName, String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('link_$folderName', url);
+    setState(() {
+      _completedUrls[folderName] = url;
+    });
   }
 
   Future<void> _loadSessions() async {
@@ -213,51 +307,30 @@ class _SessionGalleryPageState extends State<SessionGalleryPage> {
     });
   }
 
-  // Refactored to use the new non-blocking service method
   void _startUpload(Directory folder) {
     final name = folder.path.split('/').last;
     
     _dropbox.uploadSession(
       folder,
-      onComplete: (sharedUrl) {
+      onComplete: (sharedUrl) async {
+        await _saveLink(name, sharedUrl); // Save persistently
         if (mounted) {
           _showShareSuccessDialog(name, sharedUrl);
         }
       },
       onError: (error) {
-        if (mounted) {
-          _showSnackBar(error);
-        }
+        if (mounted) _showSnackBar(error);
       },
     );
   }
 
-  void _showShareSuccessDialog(String folderName, String url) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text("Upload Complete"),
-        content: Text("Folder '$folderName' is now on Dropbox and ready to share."),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Clipboard.setData(ClipboardData(text: url));
-              Navigator.pop(ctx);
-              _showSnackBar("Link copied to clipboard!");
-            },
-            child: const Text("Copy Link"),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text("Close"),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showSnackBar(String message) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  Future<void> _openDropboxUrl(String url) async {
+    final Uri uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else {
+      _showSnackBar("Could not open link");
+    }
   }
 
   @override
@@ -278,13 +351,13 @@ class _SessionGalleryPageState extends State<SessionGalleryPage> {
                     final folder = _sessions[i];
                     final name = folder.path.split('/').last;
                     
-                    // Check if this specific folder is currently uploading
                     final isUploading = activeUploads.containsKey(name);
                     final progress = activeUploads[name] ?? 0.0;
+                    final finishedUrl = _completedUrls[name];
 
                     return Card(
                       margin: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                      clipBehavior: Clip.antiAlias, // Ensures progress bar corners match card
+                      clipBehavior: Clip.antiAlias,
                       child: Column(
                         children: [
                           ListTile(
@@ -298,16 +371,25 @@ class _SessionGalleryPageState extends State<SessionGalleryPage> {
                                     icon: const Icon(Icons.cancel, color: Colors.red),
                                     onPressed: () => _dropbox.cancelUpload(name),
                                   )
-                                : IconButton(
-                                    icon: const Icon(Icons.cloud_upload, color: Colors.blue),
-                                    onPressed: () => _startUpload(folder),
-                                  ),
+                                : (finishedUrl != null)
+                                    ? ElevatedButton.icon(
+                                        onPressed: () => _openDropboxUrl(finishedUrl),
+                                        icon: const Icon(Icons.open_in_new, size: 16),
+                                        label: const Text("Dropbox"),
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: Colors.blue,
+                                          foregroundColor: Colors.white,
+                                        ),
+                                      )
+                                    : IconButton(
+                                        icon: const Icon(Icons.cloud_upload, color: Colors.blue),
+                                        onPressed: () => _startUpload(folder),
+                                      ),
                             onTap: () => Navigator.push(
                               context,
                               MaterialPageRoute(builder: (_) => FileBrowserPage(directory: folder)),
                             ),
                           ),
-                          // The Persistent Progress Bar
                           if (isUploading)
                             LinearProgressIndicator(
                               value: progress,
@@ -324,8 +406,32 @@ class _SessionGalleryPageState extends State<SessionGalleryPage> {
             ),
     );
   }
-}
 
+  void _showShareSuccessDialog(String folderName, String url) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text("Upload Complete"),
+        content: const Text("Folder is now on Dropbox and ready to share."),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: url));
+              Navigator.pop(ctx);
+              _showSnackBar("Link copied!");
+            },
+            child: const Text("Copy Link"),
+          ),
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text("Close")),
+        ],
+      ),
+    );
+  }
+
+  void _showSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(message)));
+  }
+}
 /* ─────────────────────────────────────────────────────────────
    FILE BROWSER PAGE
    ───────────────────────────────────────────────────────────── */
@@ -349,8 +455,9 @@ class FileBrowserPage extends StatelessWidget {
           final file = files[i];
           final fileName = file.path.split('/').last;
           
-          final isVideo = fileName.endsWith('.mov') || fileName.endsWith('.mp4');
-          final isLidar = fileName.endsWith('.raw'); // Detect LiDAR
+          final isVideo = fileName.toLowerCase().endsWith('.mov') || 
+                          fileName.toLowerCase().endsWith('.mp4');
+          final isLidar = fileName.toLowerCase().endsWith('.raw'); // Detect LiDAR
 
           return ListTile(
             leading: Icon(
@@ -358,13 +465,29 @@ class FileBrowserPage extends StatelessWidget {
               color: isLidar ? Colors.purple : (isVideo ? Colors.red : Colors.blueGrey),
             ),
             title: Text(fileName),
-            subtitle: Text("${(file.lengthSync() / 1024).toStringAsFixed(1)} KB"),
+            subtitle: Text("${(file.lengthSync() / (1024 * 1024)).toStringAsFixed(2)} MB"),
             onTap: () {
               if (isLidar) {
                 Navigator.push(
                   context,
                   MaterialPageRoute(
                     builder: (_) => LidarHeatmapViewer(file: file),
+                  ),
+                );
+              } else if (isVideo) {
+                // Navigate to your VideoPlayerPage
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => VideoPlayerPage(videoFile: file),
+                  ),
+                );
+              } else if (isVideo) {
+                // Navigate to your VideoPlayerPage
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (_) => VideoPlayerPage(videoFile: file),
                   ),
                 );
               }
